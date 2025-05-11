@@ -10,6 +10,7 @@ import (
 	"github.com/canonical/lxd/lxd/storage/connectors"
 	"github.com/canonical/lxd/shared"
 	"github.com/canonical/lxd/shared/api"
+	"github.com/canonical/lxd/shared/logger"
 	"github.com/canonical/lxd/shared/revert"
 	"github.com/canonical/lxd/shared/units"
 	"github.com/canonical/lxd/shared/validate"
@@ -115,6 +116,7 @@ func (d *hpe) Info() Info {
 
 // FillConfig populates the storage pool's configuration file with the default values.
 func (d *hpe) FillConfig() error {
+	logger.Debug("HPE FillConfig()")
 	// Use NVMe by default.
 	if d.config["hpe.mode"] == "" {
 		d.config["hpe.mode"] = connectors.TypeNVME
@@ -126,49 +128,19 @@ func (d *hpe) FillConfig() error {
 // Validate checks that all provided keys are supported and there is no conflicting or missing configuration.
 func (d *hpe) Validate(config map[string]string) error {
 	rules := map[string]func(value string) error{
-		"size": validate.Optional(validate.IsSize),
-		// lxdmeta:generate(entities=storage-hpe; group=pool-conf; key=hpe.api.token)
-		// API authorization token for HPE Storage gateway. Must have array_admin role to give LXD full control over managed storage pools (HPE Storage pods).
-		// ---
-		//  type: string
-		//  shortdesc: API authorization token for HPE Storage gateway
-		"hpe.api.token": validate.Optional(),
-		// lxdmeta:generate(entities=storage-hpe; group=pool-conf; key=hpe.gateway)
-		//
-		// ---
-		//  type: string
-		//  shortdesc: Address of the HPE Storage gateway
-		"hpe.gateway": validate.Optional(validate.IsRequestURL),
-		// lxdmeta:generate(entities=storage-hpe; group=pool-conf; key=hpe.gateway.verify)
-		//
-		// ---
-		//  type: bool
-		//  defaultdesc: `true`
-		//  shortdesc: Whether to verify the HPE Storage gateway's certificate
-		"hpe.gateway.verify": validate.Optional(validate.IsBool),
-		// lxdmeta:generate(entities=storage-hpe; group=pool-conf; key=hpe.target)
-		// A comma-separated list of target addresses. If empty, LXD discovers and connects to all available targets. Otherwise, it only connects to the specified addresses.
-		// ---
-		//  type: string
-		//  defaultdesc: the discovered mode
-		//  shortdesc: List of target addresses.
-		"hpe.target": validate.Optional(validate.IsListOf(validate.IsNetworkAddress)),
-		// lxdmeta:generate(entities=storage-hpe; group=pool-conf; key=hpe.mode)
-		// The mode to use to map HPE Storage volumes to the local server.
-		// Supported values are `iscsi` and `nvme`.
-		// ---
-		//  type: string
-		//  defaultdesc: the discovered mode
-		//  shortdesc: How volumes are mapped to the local server
-		"hpe.mode": validate.Optional(validate.IsOneOf(hpeSupportedConnectors...)),
-		// lxdmeta:generate(entities=storage-hpe; group=pool-conf; key=volume.size)
-		// Default HPE Storage volume size rounded to 512B. The minimum size is 1MiB.
-		// ---
-		//  type: string
-		//  defaultdesc: `10GiB`
-		//  shortdesc: Size/quota of the storage volume
-		"volume.size": validate.Optional(validate.IsMultipleOfUnit("512B")),
+		"hpe.wsapi.url":          validate.Optional(validate.IsRequestURL),
+		"hpe.wsapi.verifyssl":    validate.Optional(validate.IsBool),
+		"hpe.wsapi.username":     validate.IsAny,
+		"hpe.wsapi.password":     validate.IsAny,
+		"hpe.cpg.name":           validate.IsAny,
+		"hpe.cpg.domain":         validate.IsAny,
+		"hpe.target":             validate.Optional(validate.IsListOf(validate.IsNetworkAddress)),
+		"hpe.mode":               validate.Optional(validate.IsOneOf(hpeSupportedConnectors...)),
+		"hpe.cpg.growthLimitMiB": validate.Optional(validate.IsSize),
+		"volume.size":            validate.Optional(validate.IsMultipleOfUnit("512M")),
 	}
+
+	logger.Debug("HPE Validate()")
 
 	err := d.validatePool(config, rules, d.commonVolumeRules())
 	if err != nil {
@@ -208,6 +180,8 @@ func (d *hpe) Validate(config map[string]string) error {
 // Create is called during pool creation and is effectively using an empty driver struct.
 // WARNING: The Create() function cannot rely on any of the struct attributes being set.
 func (d *hpe) Create() error {
+	logger.Debug("HPE Create()")
+
 	err := d.FillConfig()
 	if err != nil {
 		return err
@@ -219,15 +193,24 @@ func (d *hpe) Create() error {
 	// Validate required HPE Storage configuration keys and return an error if they are
 	// not set. Since those keys are not cluster member specific, the general validation
 	// rules allow empty strings in order to create the pending storage pools.
-	if d.config["hpe.gateway"] == "" {
-		return fmt.Errorf("The hpe.gateway cannot be empty")
+
+	if d.config["hpe.wsapi.url"] == "" {
+		return fmt.Errorf("The hpe.wsapi.url cannot be empty")
 	}
 
-	if d.config["hpe.api.token"] == "" {
-		return fmt.Errorf("The hpe.api.token cannot be empty")
+	if d.config["hpe.wsapi.username"] == "" {
+		return fmt.Errorf("The hpe.wsapi.username cannot be empty")
 	}
 
-	poolSizeBytes, err := units.ParseByteSizeString(d.config["size"])
+	if d.config["hpe.wsapi.password"] == "" {
+		return fmt.Errorf("The hpe.wsapi.password cannot be empty")
+	}
+
+	if d.config["hpe.cpg.name"] == "" {
+		return fmt.Errorf("The hpe.cpg.name cannot be empty")
+	}
+
+	poolSizeBytes, err := units.ParseByteSizeString(d.config["hpe.cpg.growthLimitMiB"])
 	if err != nil {
 		return fmt.Errorf("Failed to parse storage size: %w", err)
 	}
@@ -247,6 +230,8 @@ func (d *hpe) Create() error {
 
 // Update applies any driver changes required from a configuration change.
 func (d *hpe) Update(changedConfig map[string]string) error {
+	logger.Debug("HPE Update()")
+
 	newPoolSizeBytes, err := units.ParseByteSizeString(changedConfig["size"])
 	if err != nil {
 		return fmt.Errorf("Failed to parse storage size: %w", err)
@@ -269,6 +254,8 @@ func (d *hpe) Update(changedConfig map[string]string) error {
 
 // Delete removes the storage pool (HPE Storage pod).
 func (d *hpe) Delete(op *operations.Operation) error {
+	logger.Debug("HPE Delete()")
+
 	// First delete the storage pool on HPE Storage.
 	err := d.client().deleteStoragePool(d.name)
 	if err != nil && !api.StatusErrorCheck(err, http.StatusNotFound) {
@@ -298,33 +285,33 @@ func (d *hpe) Unmount() (bool, error) {
 
 // GetResources returns the pool resource usage information.
 func (d *hpe) GetResources() (*api.ResourcesStoragePool, error) {
-	pool, err := d.client().getStoragePool(d.name)
+	_, err := d.client().getStoragePool(d.name)
 	if err != nil {
 		return nil, err
 	}
 
 	res := &api.ResourcesStoragePool{}
 
-	res.Space.Total = uint64(pool.Quota)
-	res.Space.Used = uint64(pool.Space.UsedBytes)
+	// res.Space.Total = uint64(pool.Quota)
+	// res.Space.Used = uint64(pool.Space.UsedBytes)
 
-	if pool.Quota == 0 {
-		// If quota is set to 0, it means that the storage pool is unbounded. Therefore,
-		// collect the total capacity of arrays where storage pool provisioned.
-		arrayNames := make([]string, 0, len(pool.Arrays))
-		for _, array := range pool.Arrays {
-			arrayNames = append(arrayNames, array.Name)
-		}
+	// if pool.Quota == 0 {
+	// 	// If quota is set to 0, it means that the storage pool is unbounded. Therefore,
+	// 	// collect the total capacity of arrays where storage pool provisioned.
+	// 	arrayNames := make([]string, 0, len(pool.Arrays))
+	// 	for _, array := range pool.Arrays {
+	// 		arrayNames = append(arrayNames, array.Name)
+	// 	}
 
-		arrays, err := d.client().getStorageArrays(arrayNames...)
-		if err != nil {
-			return nil, err
-		}
+	// 	arrays, err := d.client().getStorageArrays(arrayNames...)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
 
-		for _, array := range arrays {
-			res.Space.Total += uint64(array.Capacity)
-		}
-	}
+	// 	for _, array := range arrays {
+	// 		res.Space.Total += uint64(array.Capacity)
+	// 	}
+	// }
 
 	return res, nil
 }

@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -120,7 +119,7 @@ func isHpeErrorOf(err error, statusCode int, substrings ...string) bool {
 // hpeIsNotFoundError returns true if the error is of type hpeError, its status code is 400 (bad request),
 // and the error message contains a substring indicating the resource was not found.
 func isHpeErrorNotFound(err error) bool {
-	return isHpeErrorOf(err, http.StatusBadRequest, "Not found", "Does not exist", "No such volume or snapshot")
+	return isHpeErrorOf(err, http.StatusNotFound, "Not found", "Does not exist", "No such volume or snapshot")
 }
 
 // hpeResponse wraps the response from the HPE Storage API. In most cases, the response
@@ -177,14 +176,10 @@ type hpeDefaultProtection struct {
 	Type string `json:"type"`
 }
 
-// hpeStoragePool represents a storage pool (pod) in HPE Storage.
 type hpeStoragePool struct {
-	ID          string      `json:"id"`
-	Name        string      `json:"name"`
-	IsDestroyed bool        `json:"destroyed"`
-	Quota       int64       `json:"quota_limit"`
-	Space       hpeSpace    `json:"space"`
-	Arrays      []hpeEntity `json:"arrays"`
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+	UUID string `json:"uuid"`
 }
 
 // hpeVolume represents a volume in HPE Storage.
@@ -213,8 +208,8 @@ type hpePort struct {
 
 // hpeClient holds the HPE Storage HTTP client and an access token.
 type hpeClient struct {
-	driver      *hpe
-	accessToken string
+	driver     *hpe
+	sessionKey string
 }
 
 // newHpeClient creates a new instance of the HTTP HPE Storage client.
@@ -236,42 +231,18 @@ func (p *hpeClient) createBodyReader(contents map[string]any) (io.Reader, error)
 	return body, nil
 }
 
-// request issues a HTTP request against the HPE Storage gateway.
+// request issues a HTTP request against HPE Storage WSAPI
 func (p *hpeClient) request(method string, url url.URL, reqBody map[string]any, reqHeaders map[string]string, respBody any, respHeaders map[string]string) error {
+	logger.Debug("HPE request()")
 	// Extract scheme and host from the gateway URL.
-	scheme, host, found := strings.Cut(p.driver.config["hpe.gateway"], "://")
+	scheme, host, found := strings.Cut(p.driver.config["hpe.wsapi.url"], "://")
 	if !found {
-		return fmt.Errorf("Invalid HPE Storage gateway URL: %q", p.driver.config["hpe.gateway"])
+		return fmt.Errorf("Invalid HPE Storage WSAPI URL: %q", p.driver.config["hpe.wsapi.url"])
 	}
 
 	// Set request URL scheme and host.
 	url.Scheme = scheme
 	url.Host = host
-
-	// Prefixes the given path with the API version in the format "/api/<version>/<path>".
-	// If the path is "/api/api_version", the API version is not included as this path
-	// is used to retrieve supported API versions.
-	if url.Path != "/api/api_version" {
-		// If API version is not known yet, retrieve and cache it first.
-		if p.driver.apiVersion == "" {
-			apiVersions, err := p.getAPIVersions()
-			if err != nil {
-				return fmt.Errorf("Failed to retrieve supported HPE Storage API versions: %w", err)
-			}
-
-			// Ensure the required API version is supported by HPE Storage array.
-			if !slices.Contains(apiVersions, hpeAPIVersion) {
-				return fmt.Errorf("Required API version %q is not supported by HPE Storage array", hpeAPIVersion)
-			}
-
-			// Set API version to the driver to avoid checking the API version
-			// for each subsequent request.
-			p.driver.apiVersion = hpeAPIVersion
-		}
-
-		// Prefix current path with the API version.
-		url.Path = path.Join("api", p.driver.apiVersion, url.Path)
-	}
 
 	var err error
 	var reqBodyReader io.Reader
@@ -301,33 +272,96 @@ func (p *hpeClient) request(method string, url url.URL, reqBody map[string]any, 
 	client := &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: shared.IsFalse(p.driver.config["hpe.gateway.verify"]),
+				InsecureSkipVerify: shared.IsFalse(p.driver.config["hpe.wsapi.verifyssl"]),
 			},
 		},
 	}
+
+	logger.Debugf("Request URL: %s", url.String())
+	logger.Debugf("Request Method: %s", req.Method)
+
+	parsedReqHeaders := ""
+	for name, values := range req.Header {
+		parsedReqHeaders += fmt.Sprintf("%s: %s\n", name, strings.Join(values, ", "))
+	}
+	logger.Debugf("Request Headers:\n%s", parsedReqHeaders)
+
+	// logger.Debugf("Request Body:\n%s", reqBody)
+
+	// reqBodyDisplay := make([]string, 0, len(reqBody))
+	// for k, v := range reqBody {
+	// 	reqBodyDisplay = append(reqBodyDisplay, fmt.Sprintf("%s=%v", k, v))
+	// }
+	// logger.Debugf("Request Body (KV):\n%s", strings.Join(reqBodyDisplay, "\n"))
+
+	reqBodyJSON, err := json.MarshalIndent(reqBody, "", "    ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal request body: %w", err)
+	}
+	logger.Debugf("Request Body (JSON):\n%s", string(reqBodyJSON))
 
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("Failed to send request: %w", err)
 	}
 
+	logger.Debugf("Response Status Code: %d", resp.StatusCode)
+
 	defer resp.Body.Close()
+
+	var responseBodyBuffer bytes.Buffer
+	teeReader := io.TeeReader(resp.Body, &responseBodyBuffer)
+	bodyBytes, err := io.ReadAll(teeReader)
+	if err != nil {
+		return fmt.Errorf("Failed to read response body for TeeReader: %w", err)
+	}
+
+	allowedCT := "application/json"
+	if resp.Header.Get("Content-Type") != allowedCT &&
+		len(bodyBytes) > 0 {
+		return fmt.Errorf("Response Header Content-type: %q. Only %q responses allowed for non-empty Response Body", resp.Header.Get("Content-Type"), allowedCT)
+	}
+
+	parsedRespHeaders := ""
+	// undesiredHeaders := []string{}
+	undesireRespdHeaders := []string{"X-Frame-Options", "Set-Cookie", "Content-Security-Policy", "Strict-Transport-Security", "Cache-Control", "Vary", "X-Content-Type-Options", "Content-Language", "X-Xss-Protection", "Pragma", "Accept-Ranges", "Last-Modified", "Accept-Ranges"}
+
+	for name, values := range resp.Header {
+		skip := slices.Contains(undesireRespdHeaders, name)
+		if skip {
+			continue
+		}
+		parsedRespHeaders += fmt.Sprintf("%s: %s\n", name, strings.Join(values, ", "))
+	}
+	logger.Debugf("Response Headers (filtered):\n%s", parsedRespHeaders)
+
+	var prettyBody any
+	if json.Unmarshal(bodyBytes, &prettyBody) == nil {
+		b, _ := json.MarshalIndent(prettyBody, "", "  ")
+		logger.Debugf("Response Body (JSON):\n%s", string(b))
+	} else {
+		logger.Debugf("Response Body (RAW):\n%s", string(bodyBytes))
+	}
 
 	// The unauthorized error is reported when an invalid (or expired) access token is provided.
 	// Wrap unauthorized requests into an API status error to allow easier checking for expired
 	// token in the requestAuthenticated function.
-	if resp.StatusCode == http.StatusUnauthorized {
-		return api.StatusErrorf(http.StatusUnauthorized, "Unauthorized request")
-	}
+	// if resp.StatusCode == http.StatusUnauthorized {
+	// 	return api.StatusErrorf(http.StatusUnauthorized, "xxx 1 Unauthorized request")
+	// } else if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+	// 	return api.StatusErrorf(http.StatusForbidden, "xxx 2 Unauthorized status code: %d", resp.StatusCode)
+	// }
 
 	// Overwrite the response data type if an error is detected.
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK &&
+		resp.StatusCode != http.StatusCreated &&
+		resp.StatusCode != http.StatusAccepted {
 		respBody = &hpeError{}
 	}
 
 	// Extract the response body if requested.
 	if respBody != nil {
-		err = json.NewDecoder(resp.Body).Decode(respBody)
+		err = json.Unmarshal(bodyBytes, &respBody)
 		if err != nil {
 			return fmt.Errorf("Failed to read response body from %q: %w", url.String(), err)
 		}
@@ -351,38 +385,45 @@ func (p *hpeClient) request(method string, url url.URL, reqBody map[string]any, 
 }
 
 // requestAuthenticated issues an authenticated HTTP request against the HPE Storage gateway.
-// In case the access token is expired, the function will try to obtain a new one.
+// In case the Session Key is expired, the function will try to obtain a new one.
 func (p *hpeClient) requestAuthenticated(method string, url url.URL, reqBody map[string]any, respBody any) error {
+	logger.Debug("HPE requestAuthenticated()")
+
 	// If request fails with an unauthorized error, the request will be retried after
-	// requesting a new access token.
-	retries := 1
+	// requesting a new Session Key.
+	retries := 0
 
 	for {
+		if retries >= 3 {
+			return fmt.Errorf("HPE maximium retires reached: %d. URL: %q. Method: %s", retries, url.String(), method)
+		}
+
+		retries++
+		logger.Debugf("HPE atempt: %d", retries)
+
 		// Ensure we are logged into the HPE Storage.
 		err := p.login()
 		if err != nil {
 			return err
 		}
 
-		// Set access token as request header.
+		// Add Session Key to Headers.
 		reqHeaders := map[string]string{
-			"X-Auth-Token": p.accessToken,
+			"X-HP3PAR-WSAPI-SessionKey": p.sessionKey,
 		}
+		logger.Debugf("HPE add Session Key to Headers: %s", p.sessionKey)
 
 		// Initiate request.
 		err = p.request(method, url, reqBody, reqHeaders, respBody, nil)
 		if err != nil {
-			if api.StatusErrorCheck(err, http.StatusUnauthorized) && retries > 0 {
-				// Access token seems to be expired.
-				// Reset the token and try one more time.
-				p.accessToken = ""
-				retries--
-				continue
+			logger.Debugf("HPE requth xxx: %q", err)
+			if api.StatusErrorCheck(err, http.StatusForbidden) {
+				logger.Debugf("HPE resetting Session Key: %s", err)
+				p.sessionKey = ""
+			} else {
+				logger.Debugf("HPE authorized request failed: %s", err)
 			}
-
-			// Either the error is not of type unauthorized or the maximum number of
-			// retries has been exceeded.
-			return err
+			continue
 		}
 
 		return nil
@@ -395,7 +436,7 @@ func (p *hpeClient) getAPIVersions() ([]string, error) {
 		APIVersions []string `json:"version"`
 	}
 
-	url := api.NewURL().Path("api", "api_version")
+	url := api.NewURL().Path("api", "v1", "wsapiconfiguration")
 	err := p.request(http.MethodGet, url.URL, nil, nil, &resp, nil)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to retrieve available API versions from HPE Storage: %w", err)
@@ -408,30 +449,40 @@ func (p *hpeClient) getAPIVersions() ([]string, error) {
 	return resp.APIVersions, nil
 }
 
-// login initiates an authentication request against the HPE Storage using the API token. If successful,
-// an access token is retrieved and stored within a client. The access token is then used for further
-// authentication.
+// login initiates an authentication request using WSAPI username and password.
+// If successful then Session Key is retrieved and stored within a client.
+// Once stored the Session Key is reused for further requests.
 func (p *hpeClient) login() error {
-	if p.accessToken != "" {
-		// Token has been already obtained.
+	logger.Debug("HPE login()")
+
+	if p.sessionKey != "" {
+		logger.Debugf("HPE reusing stored Session Key: %s", p.sessionKey)
 		return nil
 	}
 
-	reqHeaders := map[string]string{
-		"api-token": p.driver.config["hpe.api.token"],
+	var respBody struct {
+		Key string `json:"key"`
 	}
 
 	respHeaders := make(map[string]string)
 
-	url := api.NewURL().Path("login")
-	err := p.request(http.MethodPost, url.URL, nil, reqHeaders, nil, respHeaders)
-	if err != nil {
-		return fmt.Errorf("Failed to login: %w", err)
+	body := map[string]any{
+		"user":        p.driver.config["hpe.wsapi.username"],
+		"password":    p.driver.config["hpe.wsapi.password"],
+		"sessionType": 1,
 	}
 
-	p.accessToken = respHeaders["X-Auth-Token"]
-	if p.accessToken == "" {
-		return errors.New("Failed to obtain access token")
+	url := api.NewURL().Path("api", "v1", "credentials")
+	err := p.request(http.MethodPost, url.URL, body, nil, &respBody, respHeaders)
+	if err != nil {
+		return fmt.Errorf("HPE failed to login: %w", err)
+	}
+
+	if respBody.Key == "" {
+		return errors.New("HPE invalid empty Session Key")
+	} else {
+		p.sessionKey = respBody.Key
+		logger.Debugf("HPE save extracted Session Key: %s", p.sessionKey)
 	}
 
 	return nil
@@ -458,183 +509,57 @@ func (p *hpeClient) getNetworkInterfaces(service string) ([]hpeNetworkInterface,
 	return resp.Items, nil
 }
 
-// getProtectionGroup returns the protection group with the given name.
-func (p *hpeClient) getProtectionGroup(name string) (*hpeProtectionGroup, error) {
-	var resp hpeResponse[hpeProtectionGroup]
-
-	url := api.NewURL().Path("protection-groups").WithQuery("names", name)
-	err := p.requestAuthenticated(http.MethodGet, url.URL, nil, &resp)
-	if err != nil {
-		if isHpeErrorNotFound(err) {
-			return nil, api.StatusErrorf(http.StatusNotFound, "Protection group %q not found", name)
-		}
-
-		return nil, fmt.Errorf("Failed to get protection group %q: %w", name, err)
-	}
-
-	if len(resp.Items) == 0 {
-		return nil, api.StatusErrorf(http.StatusNotFound, "Protection group %q not found", name)
-	}
-
-	return &resp.Items[0], nil
-}
-
-// deleteProtectionGroup deletes the protection group with the given name.
-func (p *hpeClient) deleteProtectionGroup(name string) error {
-	pg, err := p.getProtectionGroup(name)
-	if err != nil {
-		if api.StatusErrorCheck(err, http.StatusNotFound) {
-			// Already removed.
-			return nil
-		}
-
-		return err
-	}
-
-	url := api.NewURL().Path("protection-groups").WithQuery("names", name)
-
-	// Ensure the protection group is destroyed.
-	if !pg.IsDestroyed {
-		req := map[string]any{
-			"destroyed": true,
-		}
-
-		err = p.requestAuthenticated(http.MethodPatch, url.URL, req, nil)
-		if err != nil {
-			return fmt.Errorf("Failed to destroy protection group %q: %w", name, err)
-		}
-	}
-
-	// Delete the protection group.
-	err = p.requestAuthenticated(http.MethodDelete, url.URL, nil, nil)
-	if err != nil {
-		return fmt.Errorf("Failed to delete protection group %q: %w", name, err)
-	}
-
-	return nil
-}
-
-// deleteStoragePoolDefaultProtections unsets default protections for the given
-// storage pool and removes its default protection groups.
-func (p *hpeClient) deleteStoragePoolDefaultProtections(poolName string) error {
-	var resp hpeResponse[struct {
-		Type               string                 `json:"type"`
-		DefaultProtections []hpeDefaultProtection `json:"default_protections"`
-	}]
-
-	url := api.NewURL().Path("container-default-protections").WithQuery("names", poolName)
-
-	// Extract default protections for the given storage pool.
-	err := p.requestAuthenticated(http.MethodGet, url.URL, nil, &resp)
-	if err != nil {
-		if isHpeErrorNotFound(err) {
-			// Default protections does not exist.
-			return nil
-		}
-
-		return fmt.Errorf("Failed to get default protections for storage pool %q: %w", poolName, err)
-	}
-
-	// Remove default protections and protection groups related to the storage pool.
-	for _, item := range resp.Items {
-		// Ensure protection applies to the storage pool.
-		if item.Type != "pod" {
-			continue
-		}
-
-		// To be able to delete default protection groups, they have to
-		// be removed from the list of default protections.
-		req := map[string]any{
-			"default_protections": []hpeDefaultProtection{},
-		}
-
-		err = p.requestAuthenticated(http.MethodPatch, url.URL, req, nil)
-		if err != nil {
-			if isHpeErrorNotFound(err) {
-				// Default protection already removed.
-				continue
-			}
-
-			return fmt.Errorf("Failed to unset default protections for storage pool %q: %w", poolName, err)
-		}
-
-		// Iterate over default protections and extract protection group names.
-		for _, pg := range item.DefaultProtections {
-			if pg.Type != "protection_group" {
-				continue
-			}
-
-			// Remove protection groups.
-			err := p.deleteProtectionGroup(pg.Name)
-			if err != nil {
-				return fmt.Errorf("Failed to remove protection group %q for storage pool %q: %w", pg.Name, poolName, err)
-			}
-		}
-	}
-
-	return nil
-}
-
-// getStorageArray returns the list of storage arrays.
-// If arrayNames are provided, only those are returned.
-func (p *hpeClient) getStorageArrays(arrayNames ...string) ([]hpeStorageArray, error) {
-	var resp hpeResponse[hpeStorageArray]
-
-	url := api.NewURL().Path("arrays").WithQuery("names", strings.Join(arrayNames, ","))
-	err := p.requestAuthenticated(http.MethodGet, url.URL, nil, &resp)
-	if err != nil {
-		return nil, fmt.Errorf("Failed to get storage arrays: %w", err)
-	}
-
-	return resp.Items, nil
-}
-
 // getStoragePool returns the storage pool with the given name.
 func (p *hpeClient) getStoragePool(poolName string) (*hpeStoragePool, error) {
-	var resp hpeResponse[hpeStoragePool]
+	logger.Debugf("HPE getStoragePool()")
 
-	url := api.NewURL().Path("pods").WithQuery("names", poolName)
+	var resp struct {
+		Total   int              `json:"total"`
+		Members []hpeStoragePool `json:"members"`
+	}
+
+	url := api.NewURL().Path("api", "v1", "cpgs")
 	err := p.requestAuthenticated(http.MethodGet, url.URL, nil, &resp)
 	if err != nil {
-		if isHpeErrorNotFound(err) {
-			return nil, api.StatusErrorf(http.StatusNotFound, "Storage pool %q not found", poolName)
-		}
-
 		return nil, fmt.Errorf("Failed to get storage pool %q: %w", poolName, err)
 	}
 
-	if len(resp.Items) == 0 {
-		return nil, api.StatusErrorf(http.StatusNotFound, "Storage pool %q not found", poolName)
+	var foundMember *hpeStoragePool
+	for _, member := range resp.Members {
+		if member.Name == poolName {
+			foundMember = &member
+			break
+		}
 	}
 
-	return &resp.Items[0], nil
+	if foundMember == nil {
+		logger.Debugf("HPE storage pool %q not found", poolName)
+		return nil, fmt.Errorf("HPE Storage pool %q not found", poolName)
+	} else {
+		logger.Debugf("HPE storage pool %q found. ID: %d. UUID: %s", foundMember.Name, foundMember.ID, foundMember.UUID)
+	}
+
+	return foundMember, nil
 }
 
-// createStoragePool creates a storage pool (HPE Storage pod).
+// createStoragePool creates a storage pool.
 func (p *hpeClient) createStoragePool(poolName string, size int64) error {
+	logger.Debugf("HPE createStoragePool()")
+
 	revert := revert.New()
 	defer revert.Fail()
 
-	req := make(map[string]any)
-	if size > 0 {
-		req["quota_limit"] = size
+	req := map[string]any{
+		"name": poolName,
 	}
 
-	pool, err := p.getStoragePool(poolName)
-	if err == nil && pool.IsDestroyed {
-		// Storage pool exists in destroyed state, therefore, restore it.
-		req["destroyed"] = false
-
-		url := api.NewURL().Path("pods").WithQuery("names", poolName)
-		err = p.requestAuthenticated(http.MethodPatch, url.URL, req, nil)
-		if err != nil {
-			return fmt.Errorf("Failed to restore storage pool %q: %w", poolName, err)
-		}
-
-		logger.Info("Storage pool has been restored", logger.Ctx{"pool": poolName})
+	logger.Debugf("HPE check if %s is already created", poolName)
+	_, err := p.getStoragePool(poolName)
+	if err == nil {
+		logger.Debugf("HPE storage pool %s already created", poolName)
 	} else {
-		// Storage pool does not exist in destroyed state, therefore, try to create a new one.
-		url := api.NewURL().Path("pods").WithQuery("names", poolName)
+		logger.Debugf("HPE creating a new storage pool: %s", poolName)
+		url := api.NewURL().Path("api", "v1", "cpgs")
 		err = p.requestAuthenticated(http.MethodPost, url.URL, req, nil)
 		if err != nil {
 			return fmt.Errorf("Failed to create storage pool %q: %w", poolName, err)
@@ -643,19 +568,13 @@ func (p *hpeClient) createStoragePool(poolName string, size int64) error {
 
 	revert.Add(func() { _ = p.deleteStoragePool(poolName) })
 
-	// Delete default protection groups of the new storage pool to ensure
-	// there is no limitations when deleting the pool or volume.
-	err = p.deleteStoragePoolDefaultProtections(poolName)
-	if err != nil {
-		return err
-	}
-
 	revert.Success()
 	return nil
 }
 
 // updateStoragePool updates an existing storage pool (HPE Storage pod).
 func (p *hpeClient) updateStoragePool(poolName string, size int64) error {
+	logger.Debugf("HPE updateStoragePool()")
 	req := make(map[string]any)
 	if size > 0 {
 		req["quota_limit"] = size
@@ -670,53 +589,29 @@ func (p *hpeClient) updateStoragePool(poolName string, size int64) error {
 	return nil
 }
 
-// deleteStoragePool deletes a storage pool (HPE Storage pod).
+// deleteStoragePool deletes a storage pool.
 func (p *hpeClient) deleteStoragePool(poolName string) error {
-	pool, err := p.getStoragePool(poolName)
+	logger.Debugf("HPE deleteStoragePool()")
+
+	_, err := p.getStoragePool(poolName)
 	if err != nil {
 		if api.StatusErrorCheck(err, http.StatusNotFound) {
-			// Storage pool has been already removed.
 			return nil
 		}
 
-		return err
+		return nil
 	}
 
-	// To delete the storage pool, we need to destroy it first by setting the destroyed property to true.
-	// In addition, we want to destroy all of its contents to allow the pool to be deleted.
-	// If the pool is already destroyed, we can skip this step.
-	if !pool.IsDestroyed {
-		req := map[string]any{
-			"destroyed": true,
-		}
-
-		url := api.NewURL().Path("pods").WithQuery("names", poolName).WithQuery("destroy_contents", "true")
-		err = p.requestAuthenticated(http.MethodPatch, url.URL, req, nil)
-		if err != nil {
-			if isHpeErrorNotFound(err) {
-				return nil
-			}
-
-			return fmt.Errorf("Failed to destroy storage pool %q: %w", poolName, err)
-		}
-	}
-
-	// Eradicate the storage pool by permanently deleting it along all of its contents.
-	url := api.NewURL().Path("pods").WithQuery("names", poolName).WithQuery("eradicate_contents", "true")
+	url := api.NewURL().Path("api", "v1", "cpgs", poolName)
 	err = p.requestAuthenticated(http.MethodDelete, url.URL, nil, nil)
 	if err != nil {
+		logger.Debugf("HPE DSP xxx 1")
 		if isHpeErrorNotFound(err) {
+			logger.Debugf("HPE DSP xxx 2")
 			return nil
 		}
 
-		if isHpeErrorOf(err, http.StatusBadRequest, "Cannot eradicate pod") {
-			// Eradication failed, therefore the pool remains in the destroyed state.
-			// However, we still consider it as deleted because HPE Storage SafeMode
-			// may be enabled, which prevents immediate eradication of the pool.
-			logger.Warn("Storage pool is left in destroyed state", logger.Ctx{"pool": poolName, "err": err})
-			return nil
-		}
-
+		logger.Debugf("HPE SP xxx 3")
 		return fmt.Errorf("Failed to delete storage pool %q: %w", poolName, err)
 	}
 
