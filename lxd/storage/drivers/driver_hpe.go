@@ -128,16 +128,16 @@ func (d *hpe) FillConfig() error {
 // Validate checks that all provided keys are supported and there is no conflicting or missing configuration.
 func (d *hpe) Validate(config map[string]string) error {
 	rules := map[string]func(value string) error{
-		"hpe.wsapi.url":          validate.Optional(validate.IsRequestURL),
-		"hpe.wsapi.verifyssl":    validate.Optional(validate.IsBool),
-		"hpe.wsapi.username":     validate.IsAny,
-		"hpe.wsapi.password":     validate.IsAny,
-		"hpe.cpg.name":           validate.IsAny,
-		"hpe.cpg.domain":         validate.IsAny,
-		"hpe.target":             validate.Optional(validate.IsListOf(validate.IsNetworkAddress)),
-		"hpe.mode":               validate.Optional(validate.IsOneOf(hpeSupportedConnectors...)),
-		"hpe.cpg.growthLimitMiB": validate.Optional(validate.IsSize),
-		"volume.size":            validate.Optional(validate.IsMultipleOfUnit("512M")),
+		"hpe.wsapi.url":              validate.Optional(validate.IsRequestURL),
+		"hpe.wsapi.verifyssl":        validate.Optional(validate.IsBool),
+		"hpe.wsapi.username":         validate.IsAny,
+		"hpe.wsapi.password":         validate.IsAny,
+		"hpe.cpg.domain":             validate.IsAny,
+		"hpe.target":                 validate.Optional(validate.IsListOf(validate.IsNetworkAddress)),
+		"hpe.mode":                   validate.Optional(validate.IsOneOf(hpeSupportedConnectors...)),
+		"hpe.cpg.growthLimitMiB":     validate.Optional(validate.IsSize),
+		"hpe.cpg.growthIncrementMiB": validate.Optional(validate.IsSize),
+		"volume.size":                validate.Optional(validate.IsMultipleOfUnit("512M")),
 	}
 
 	logger.Debug("HPE Validate()")
@@ -206,17 +206,18 @@ func (d *hpe) Create() error {
 		return fmt.Errorf("The hpe.wsapi.password cannot be empty")
 	}
 
-	if d.config["hpe.cpg.name"] == "" {
-		return fmt.Errorf("The hpe.cpg.name cannot be empty")
+	growthIncrementMiB, err := units.ParseByteSizeString(d.config["hpe.cpg.growthIncrementMiB"])
+	if err != nil {
+		return fmt.Errorf("Failed to parse growthIncrementMiB size %q: %w", growthIncrementMiB, err)
 	}
 
-	poolSizeBytes, err := units.ParseByteSizeString(d.config["hpe.cpg.growthLimitMiB"])
+	growthLimitMiB, err := units.ParseByteSizeString(d.config["hpe.cpg.growthLimitMiB"])
 	if err != nil {
-		return fmt.Errorf("Failed to parse storage size: %w", err)
+		return fmt.Errorf("Failed to parse growthIncrementMiB size %q: %w", growthLimitMiB, err)
 	}
 
 	// Create the storage pool.
-	err = d.client().createStoragePool(d.name, poolSizeBytes)
+	err = d.client().createStoragePool(d.name, growthLimitMiB)
 	if err != nil {
 		return err
 	}
