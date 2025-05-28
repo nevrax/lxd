@@ -62,9 +62,9 @@ var hpeSnapshotPrefix = "s"
 
 // hpeError represents an error response from the HPE Storage API.
 type hpeError struct {
-	Code       int    `json:"code"`
-	Desc       string `json:"desc"`
-	statusCode int    // Used to store the HTTP status code.
+	Code           int    `json:"code"`
+	Desc           string `json:"desc"`
+	HttpStatusCode int
 }
 
 // Error implements the error interface for hpeError.
@@ -72,7 +72,7 @@ func (p *hpeError) Error() string {
 	if p == nil {
 		return ""
 	}
-	return fmt.Sprintf("HTTP Error Code: %d. HPE Error Code: %d. HPE Description: %s", p.statusCode, p.Code, p.Desc)
+	return fmt.Sprintf("HTTP Error Code: %d. HPE Error Code: %d. HPE Description: %s", p.HttpStatusCode, p.Code, p.Desc)
 }
 
 // isHpeErrorOf checks if the error is of type hpeError and matches the status code.
@@ -160,21 +160,6 @@ type hpeDefaultProtection struct {
 	Type string `json:"type"`
 }
 
-type hpeStoragePool struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
-	UUID string `json:"uuid"`
-}
-
-// hpeVolume represents a volume in HPE Storage.
-type hpeVolume struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Serial      string   `json:"serial"`
-	IsDestroyed bool     `json:"destroyed"`
-	Space       hpeSpace `json:"space"`
-}
-
 // hpePortPos represents the port position in HPE Storage.
 type hpePortPos struct {
 	Node     int `json:"node"`
@@ -207,7 +192,7 @@ type hpeHost struct {
 	ID           int              `json:"id"`
 	Name         string           `json:"name"`
 	FCPaths      []hpeFCPath      `json:"FCPaths"`
-	iSCSIPaths   []hpeISCSIPath   `json:"iSCSIPaths"`
+	ISCSIPaths   []hpeISCSIPath   `json:"iSCSIPaths"`
 	NVMETCPPaths []hpeNVMETCPPath `json:"NVMETCPPaths"`
 }
 
@@ -227,6 +212,119 @@ type hpePort struct {
 	Protocol  int    `json:"protocol"`
 	NodeWWN   string `json:"nodeWWN"`
 	LinkState int    `json:"linkState"`
+}
+
+// hpeVolume represents a volume in HPE Storage.
+type hpeVolumeOld struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Serial      string   `json:"serial"`
+	IsDestroyed bool     `json:"destroyed"`
+	Space       hpeSpace `json:"space"`
+}
+
+type hpeVolume struct {
+	ID                    int         `json:"id"`
+	Name                  string      `json:"name"`
+	ShortName             string      `json:"shortName"`
+	DeduplicationState    int         `json:"deduplicationState"`
+	CompressionState      int         `json:"compressionState"`
+	ProvisioningType      int         `json:"provisioningType"`
+	CopyType              int         `json:"copyType"`
+	BaseID                int         `json:"baseId"`
+	ReadOnly              bool        `json:"readOnly"`
+	State                 int         `json:"state"`
+	FailedStates          []string    `json:"failedStates"`
+	DegradedStates        []string    `json:"degradedStates"`
+	AdditionalStates      []string    `json:"additionalStates"`
+	TotalReservedMiB      int         `json:"totalReservedMiB"`
+	TotalUsedMiB          int         `json:"totalUsedMiB"`
+	SizeMiB               int         `json:"sizeMiB"`
+	HostWriteMiB          int         `json:"hostWriteMiB"`
+	WWN                   string      `json:"wwn"`
+	NGUID                 string      `json:"nguid"`
+	CreationTimeSec       int         `json:"creationTimeSec"`
+	CreationTime8601      string      `json:"creationTime8601"`
+	UsrSpcAllocWarningPct int         `json:"usrSpcAllocWarningPct"`
+	UsrSpcAllocLimitPct   int         `json:"usrSpcAllocLimitPct"`
+	Policies              hpePolicies `json:"policies"`
+	UserCPG               string      `json:"userCPG"`
+	UUID                  string      `json:"uuid"`
+	UDID                  int         `json:"udid"`
+	CapacityEfficiency    hpeCapacity `json:"capacityEfficiency"`
+	RcopyStatus           int         `json:"rcopyStatus"`
+	Links                 []hpeLink   `json:"links"`
+}
+
+type hpePolicies struct {
+	StaleSS    bool `json:"staleSS"`
+	OneHost    bool `json:"oneHost"`
+	ZeroDetect bool `json:"zeroDetect"`
+	System     bool `json:"system"`
+	Caching    bool `json:"caching"`
+}
+
+type hpeCapacity struct {
+	Compaction float64 `json:"compaction"`
+}
+
+type hpeLink struct {
+	Href string `json:"href"`
+	Rel  string `json:"rel"`
+}
+
+type hpeStoragePool struct {
+	ID                int             `json:"id"`
+	UUID              string          `json:"uuid"`
+	Name              string          `json:"name"`
+	ShortName         string          `json:"shortName"`
+	NumFPVVs          int             `json:"numFPVVs"`
+	NumTPVVs          int             `json:"numTPVVs"`
+	NumTDVVs          int             `json:"numTDVVs"`
+	UsrUsage          hpeUsage        `json:"UsrUsage"`
+	SAUsage           hpeUsage        `json:"SAUsage"`
+	SDUsage           hpeUsage        `json:"SDUsage"`
+	PrivateSpaceMiB   hpePrivateSpace `json:"privateSpaceMiB"`
+	SharedSpaceMiB    int             `json:"sharedSpaceMiB"`
+	RawSharedSpaceMiB int             `json:"rawSharedSpaceMiB"`
+	FreeSpaceMiB      int             `json:"freeSpaceMiB"`
+	RawFreeSpaceMiB   int             `json:"rawFreeSpaceMiB"`
+	TotalSpaceMiB     int             `json:"totalSpaceMiB"`
+	RawTotalSpaceMiB  int             `json:"rawTotalSpaceMiB"`
+	SAGrowth          hpeGrowth       `json:"SAGrowth"`
+	SDGrowth          hpeGrowth       `json:"SDGrowth"`
+	State             int             `json:"state"`
+	FailedStates      []string        `json:"failedStates"`
+	DegradedStates    []string        `json:"degradedStates"`
+	AdditionalStates  []string        `json:"additionalStates"`
+	DedupCapable      bool            `json:"dedupCapable"`
+	TDVVVersion       int             `json:"tdvvVersion"`
+	DDSRsvdMiB        int64           `json:"ddsRsvdMiB"`
+}
+
+// hpeUsage represents the usage data of HPE Storage resources.
+type hpeUsage struct {
+	TotalMiB    int64 `json:"totalMiB"`
+	RawTotalMiB int64 `json:"rawTotalMiB"`
+	UsedMiB     int64 `json:"usedMiB"`
+	RawUsedMiB  int64 `json:"rawUsedMiB"`
+}
+
+// hpePrivateSpace represents private space details.
+type hpePrivateSpace struct {
+	Base        int64 `json:"base"`
+	RawBase     int64 `json:"rawBase"`
+	Snapshot    int64 `json:"snapshot"`
+	RawSnapshot int64 `json:"rawSnapshot"`
+}
+
+// hpeGrowth represents growth details for storage.
+type hpeGrowth struct {
+	IncrementMiB int `json:"incrementMiB"`
+	LDLayout     struct {
+		RAIDType int `json:"RAIDType"`
+		HA       int `json:"HA"`
+	} `json:"LDLayout"`
 }
 
 // hpeClient holds the HPE Storage HTTP client and an access token.
@@ -373,13 +471,23 @@ func (p *hpeClient) request(method string, url url.URL, reqBody map[string]any, 
 	var prettyBody any
 	if json.Unmarshal(bodyBytes, &prettyBody) == nil {
 		b, _ := json.MarshalIndent(prettyBody, "", "  ")
-		logger.Debugf("Response Body size: %d", len(b))
-		if len(b) > 100 {
-			logger.Debugf("Response Body (JSON) - Turned off due to output size limit")
+		lines := strings.Split(string(b), "\n")
+		logger.Debugf("Response Body size (JSON): %d", len(b))
+		var outputBuffer strings.Builder
+		if len(lines) > 10 {
+			for _, line := range lines[:5] {
+				outputBuffer.WriteString(fmt.Sprintf("%s\n", line))
+			}
+			outputBuffer.WriteString("....\n....\n....\n")
+			for _, line := range lines[len(lines)-5:] {
+				outputBuffer.WriteString(fmt.Sprintf("%s\n", line))
+			}
+			logger.Debugf("Response Body (JSON) - Output truncated:\n%s", outputBuffer.String())
 		} else {
 			logger.Debugf("Response Body (JSON):\n%s", string(b))
 		}
 	} else {
+		logger.Debugf("Response Body size (RAW): %d", len(bodyBytes))
 		logger.Debugf("Response Body (RAW):\n%s", string(bodyBytes))
 	}
 
@@ -425,7 +533,7 @@ func (p *hpeClient) request(method string, url url.URL, reqBody map[string]any, 
 	// Return the formatted error from the body
 	hpeErr, assert := respBody.(*hpeError)
 	if assert {
-		hpeErr.statusCode = resp.StatusCode
+		hpeErr.HttpStatusCode = resp.StatusCode
 		return hpeErr
 	}
 
@@ -462,7 +570,7 @@ func (p *hpeClient) requestAuthenticated(method string, url url.URL, reqBody map
 	logger.Debugf("HPE add Session Key to Headers: %s", p.sessionKey)
 
 	// Initiate request.
-	err = p.request(method, url, reqBody, reqHeaders, respBody, nil)
+	err = p.request(method, url, reqBody, reqHeaders, &respBody, nil)
 
 	if err != nil {
 		// if api.StatusErrorCheck(err, http.StatusForbidden) {
@@ -476,16 +584,20 @@ func (p *hpeClient) requestAuthenticated(method string, url url.URL, reqBody map
 
 		// return nil
 
-		hpeErr, assert := respBody.(*hpeError)
+		// errMsg := err.Error()
+		// errMsgSize := len(errMsg)
+
+		// if errMsgSize > 0 {
+		hpeErr, assert := err.(*hpeError)
+
 		if assert {
-			logger.Debugf("HPE DEBUG %d", hpeErr.statusCode)
-			logger.Debugf("HPE DEBUG %d", hpeErr.Code)
-			logger.Debugf("HPE DEBUG %s", hpeErr.Desc)
+			logger.Debugf("HPE debug hpeErr.statusCode: %d", hpeErr.HttpStatusCode)
+			logger.Debugf("HPE debug hpeErr.Code: %d", hpeErr.Code)
+			logger.Debugf("HPE debug hpeErr.Desc: %s", hpeErr.Desc)
 		} else {
-			// logger.Debugf("HPE DEBUG requestAuthenticated() hpeError from Body: %s", respBody)
-			logger.Debugf("HPE DEBUG requestAuthenticated() hpeError assert: %s", hpeErr)
-			// return nil
+			logger.Debugf("HPE debug cannot assert hpeError: %s", hpeErr)
 		}
+		// }
 
 		logger.Debugf("HPE authorized request failed for %s %q with error: %s", strings.ToUpper(method), url.String(), err)
 		return err
@@ -579,10 +691,7 @@ func (p *hpeClient) getNetworkInterfaces(service string) ([]hpeNetworkInterface,
 func (p *hpeClient) getStoragePool(poolName string) (*hpeStoragePool, error) {
 	logger.Debugf("HPE getStoragePool()")
 
-	var resp struct {
-		Total   int              `json:"total"`
-		Members []hpeStoragePool `json:"members"`
-	}
+	var resp hpeRespMembers[hpeStoragePool]
 
 	url := api.NewURL().Path("api", "v1", "cpgs")
 	err := p.requestAuthenticated(http.MethodGet, url.URL, nil, &resp)
@@ -685,27 +794,31 @@ func (p *hpeClient) deleteStoragePool(poolName string) error {
 func (p *hpeClient) getVolume(poolName string, volName string) (*hpeVolume, error) {
 	logger.Debugf("HPE getVolume()")
 
-	var resp hpeResponse[hpeVolume]
+	var resp hpeVolume
 
 	url := api.NewURL().Path("api", "v1", "volumes", volName)
 	err := p.requestAuthenticated(http.MethodGet, url.URL, nil, &resp)
 	if err != nil {
-		// logger.Debugf("HPE DEBUG getVolume() Error: %s", err)
-		// if isHpeErrorNotFound(err) {
-		// 	return nil, api.StatusErrorf(http.StatusNotFound, "Volume %q not found", volName)
-		// }
+		if hpeErr, ok := err.(*hpeError); ok {
+			switch hpeErr.Code {
+			case 23:
+				logger.Debugf("HPE volume does not exist: %s", volName)
+				return nil, nil
+			default:
+				return nil, fmt.Errorf("HPE debug. hpeErr.Code: %d. hpeErr.Desc: %s", hpeErr.Code, hpeErr.Desc)
+			}
+		}
 
-		// return nil, fmt.Errorf("Failed to get volume %q: %w", volName, err)
-		logger.Debugf("HPE volume not found: %s", volName)
-
-		return nil, nil
+		logger.Debugf("HPE Failed to get hpeVolume: %s", volName)
+		return nil, fmt.Errorf("Failed to get hpeVolume %q: %w", volName, err)
 	}
 
-	if len(resp.Items) == 0 {
-		return nil, api.StatusErrorf(http.StatusNotFound, "Volume %q not found", volName)
+	if resp.Name == "" {
+		logger.Debugf("HPE volume response is empty for volume name: %s", volName)
+		return nil, fmt.Errorf("HPE volume %q exists but returned an empty response", volName)
 	}
 
-	return &resp.Items[0], nil
+	return &resp, nil
 }
 
 // createVolume creates a new volume in the given storage pool. The volume is created with
@@ -733,6 +846,7 @@ func (p *hpeClient) createVolume(poolName string, volName string, sizeBytes int6
 
 // getVLUN returns VLUN related data of given volumeName
 func (p *hpeClient) getVLUN(volumeName string) (*hpeVLUN, error) {
+	logger.Debugf("HPE getVLUN()")
 	var resp hpeRespMembers[hpeVLUN]
 
 	url := api.NewURL().Path("api", "v1", "vluns").WithQuery("query", "\"volumeName"+"=="+volumeName+"\"")
@@ -743,7 +857,8 @@ func (p *hpeClient) getVLUN(volumeName string) (*hpeVLUN, error) {
 	}
 
 	if len(resp.Members) == 0 {
-		return nil, fmt.Errorf("No VLUN found for volume: %s", volumeName)
+		logger.Debugf("HPE debug no VLUN found for volume: %s", volumeName)
+		return nil, nil
 	}
 
 	member := resp.Members[0]
@@ -753,19 +868,23 @@ func (p *hpeClient) getVLUN(volumeName string) (*hpeVLUN, error) {
 
 // deleteVolume deletes an exisiting volume in the given storage pool.
 func (p *hpeClient) deleteVolume(poolName string, volName string) error {
+	logger.Debugf("HPE deleteVolume()")
 	url := api.NewURL().Path("api", "v1", "volumes", volName)
 
-	// // To destroy the volume, we need to patch it by setting the destroyed to true.
-	// err := p.requestAuthenticated(http.MethodPatch, url.URL, nil, nil)
-	// if err != nil {
-	// 	return fmt.Errorf("Failed to destroy volume %q in storage pool %q: %w", volName, poolName, err)
-	// }
-
-	// Afterwards, we can eradicate the volume. If this operation fails, the volume will remain
-	// in the destroyed state.
 	err := p.requestAuthenticated(http.MethodDelete, url.URL, nil, nil)
 	if err != nil {
-		return fmt.Errorf("Failed to delete volume %q in storage pool %q: %w", volName, poolName, err)
+		if hpeErr, ok := err.(*hpeError); ok {
+			switch hpeErr.Code {
+			case 23:
+				logger.Debugf("HPE debug volume does not exist: %s", volName)
+				return nil
+			default:
+				return fmt.Errorf("HPE debug. hpeErr.Code: %d. hpeErr.Desc: %s", hpeErr.Code, hpeErr.Desc)
+			}
+		}
+
+		logger.Debugf("HPE debug failed to delete hpeVolume %s from CPG %s", volName, poolName)
+		return fmt.Errorf("Failed to delete hpeVolume %q in CPG %q: %w", volName, poolName, err)
 	}
 
 	return nil
@@ -773,12 +892,22 @@ func (p *hpeClient) deleteVolume(poolName string, volName string) error {
 
 // resizeVolume resizes an existing volume. This function does not resize any filesystem inside the volume.
 func (p *hpeClient) resizeVolume(poolName string, volName string, sizeBytes int64, truncate bool) error {
+	logger.Debugf("HPE resizeVolume()")
+
+	vol, err := p.getVolume(poolName, volName)
+	if err != nil {
+		return fmt.Errorf("HPE failed to find volume %q in storage pool %q: %w", volName, poolName, err)
+	}
+	logger.Debugf("HPE initial srcVolume size (MiB): %d", vol.SizeMiB)
+
 	req := map[string]any{
-		"provisioned": sizeBytes,
+		"action":  3,
+		"sizeMiB": sizeBytes / (1024 * 1024),
 	}
 
-	url := api.NewURL().Path("volumes").WithQuery("names", poolName+"::"+volName).WithQuery("truncate", fmt.Sprint(truncate))
-	err := p.requestAuthenticated(http.MethodPatch, url.URL, req, nil)
+	logger.Debugf("HPE resizing volume %s (MiB): %d", volName, vol.SizeMiB)
+	url := api.NewURL().Path("api", "v1", "volumes", volName)
+	err = p.requestAuthenticated(http.MethodPut, url.URL, req, nil)
 	if err != nil {
 		return fmt.Errorf("Failed to resize volume %q in storage pool %q: %w", volName, poolName, err)
 	}
@@ -788,22 +917,33 @@ func (p *hpeClient) resizeVolume(poolName string, volName string, sizeBytes int6
 
 // copyVolume copies a source volume into destination volume. If overwrite is set to true,
 // the destination volume will be overwritten if it already exists.
-func (p *hpeClient) copyVolume(srcPoolName string, srcVolName string, dstPoolName string, dstVolName string, overwrite bool) error {
+func (p *hpeClient) copyVolume(srcPoolName string, srcVolName string, dstPoolName string, dstVolName string) error {
+	logger.Debugf("HPE copyVolume()")
+
+	srcVol, err := p.getVolume(srcPoolName, srcVolName)
+	if err != nil {
+		return fmt.Errorf("HPE failed to find srcVolume volume %q in storage pool %q: %w", srcVolName, srcPoolName, err)
+	}
+	logger.Debugf("HPE srcVolume size (MiB): %d", srcVol.SizeMiB)
+
+	err = p.createVolume(dstPoolName, dstVolName, int64(srcVol.SizeMiB*1024*1024))
+	if err != nil {
+		return fmt.Errorf("HPE failed to create destination volume copy %q for volume %q in storage pool %q: %w", dstVolName, srcVolName, dstPoolName, err)
+	}
+	logger.Debugf("HPE empty destination volume created: %s", dstVolName)
+
 	req := map[string]any{
-		"source": map[string]string{
-			"name": srcPoolName + "::" + srcVolName,
+		"action": "createPhysicalCopy",
+		"parameters": map[string]any{
+			"destVolume":   dstVolName,
+			"online":       false,
+			"saveSnapshot": false,
 		},
 	}
 
-	url := api.NewURL().Path("volumes").WithQuery("names", dstPoolName+"::"+dstVolName).WithQuery("overwrite", fmt.Sprint(overwrite))
+	url := api.NewURL().Path("api", "v1", "volumes", srcVolName)
 
-	if !overwrite {
-		// Disable default protection groups when creating a new volume to avoid potential issues
-		// when deleting the volume because protection group may prevent volume eridication.
-		url = url.WithQuery("with_default_protection", "false")
-	}
-
-	err := p.requestAuthenticated(http.MethodPost, url.URL, req, nil)
+	err = p.requestAuthenticated(http.MethodPost, url.URL, req, nil)
 	if err != nil {
 		return fmt.Errorf(`Failed to copy volume "%s/%s" to "%s/%s": %w`, srcPoolName, srcVolName, dstPoolName, dstVolName, err)
 	}
@@ -813,26 +953,27 @@ func (p *hpeClient) copyVolume(srcPoolName string, srcVolName string, dstPoolNam
 
 // getVolumeSnapshots retrieves all existing snapshot for the given storage volume.
 func (p *hpeClient) getVolumeSnapshots(poolName string, volName string) ([]hpeVolume, error) {
-	var resp hpeResponse[hpeVolume]
+	logger.Debugf("HPE getVolumeSnapshots()")
 
-	url := api.NewURL().Path("volume-snapshots").WithQuery("source_names", poolName+"::"+volName)
+	var resp hpeRespMembers[hpeVolume]
+
+	url := api.NewURL().UnEncodedPath("api", "v1", "volumes").WithQuery("query", fmt.Sprintf("\"copyOf==%s\"", volName))
+
 	err := p.requestAuthenticated(http.MethodGet, url.URL, nil, &resp)
 	if err != nil {
-		if isHpeErrorNotFound(err) {
-			return nil, api.StatusErrorf(http.StatusNotFound, "Volume %q not found", volName)
-		}
-
 		return nil, fmt.Errorf("Failed to retrieve snapshots for volume %q in storage pool %q: %w", volName, poolName, err)
 	}
 
-	return resp.Items, nil
+	return resp.Members, nil
 }
 
 // getVolumeSnapshot retrieves an existing snapshot for the given storage volume.
 func (p *hpeClient) getVolumeSnapshot(poolName string, volName string, snapshotName string) (*hpeVolume, error) {
-	var resp hpeResponse[hpeVolume]
+	logger.Debugf("HPE getVolumeSnapshot()")
 
-	url := api.NewURL().Path("volume-snapshots").WithQuery("names", poolName+"::"+volName+"."+snapshotName)
+	var resp hpeRespMembers[hpeVolume]
+
+	url := api.NewURL().UnEncodedPath("api", "v1", "volumes").WithQuery("query", fmt.Sprintf("\"copyOf==%s\"", volName))
 	err := p.requestAuthenticated(http.MethodGet, url.URL, nil, &resp)
 	if err != nil {
 		if isHpeErrorNotFound(err) {
@@ -842,23 +983,28 @@ func (p *hpeClient) getVolumeSnapshot(poolName string, volName string, snapshotN
 		return nil, fmt.Errorf("Failed to retrieve snapshot %q for volume %q in storage pool %q: %w", snapshotName, volName, poolName, err)
 	}
 
-	if len(resp.Items) == 0 {
+	if len(resp.Members) == 0 {
 		return nil, api.StatusErrorf(http.StatusNotFound, "Snapshot %q not found", snapshotName)
 	}
 
-	return &resp.Items[0], nil
+	return &resp.Members[0], nil
 }
 
 // createVolumeSnapshot creates a new snapshot for the given storage volume.
 func (p *hpeClient) createVolumeSnapshot(poolName string, volName string, snapshotName string) error {
+	logger.Debugf("HPE createVolumeSnapshot()")
+
 	req := map[string]any{
-		"suffix": snapshotName,
+		"action": "createSnapshot",
+		"parameters": map[string]any{
+			"name": snapshotName,
+		},
 	}
 
-	url := api.NewURL().Path("volume-snapshots").WithQuery("source_names", poolName+"::"+volName)
+	url := api.NewURL().Path("api", "v1", "volumes", volName)
 	err := p.requestAuthenticated(http.MethodPost, url.URL, req, nil)
 	if err != nil {
-		return fmt.Errorf("Failed to create snapshot %q for volume %q in storage pool %q: %w", snapshotName, volName, poolName, err)
+		return fmt.Errorf("HPE failed to create snapshot %q for volume %q in storage pool %q: %w", snapshotName, volName, poolName, err)
 	}
 
 	return nil
@@ -866,28 +1012,9 @@ func (p *hpeClient) createVolumeSnapshot(poolName string, volName string, snapsh
 
 // deleteVolumeSnapshot deletes an existing snapshot for the given storage volume.
 func (p *hpeClient) deleteVolumeSnapshot(poolName string, volName string, snapshotName string) error {
-	snapshot, err := p.getVolumeSnapshot(poolName, volName, snapshotName)
-	if err != nil {
-		return err
-	}
+	logger.Debugf("HPE getVolumeSnapshot()")
 
-	if !snapshot.IsDestroyed {
-		// First destroy the snapshot.
-		req := map[string]any{
-			"destroyed": true,
-		}
-
-		// Destroy snapshot.
-		url := api.NewURL().Path("volume-snapshots").WithQuery("names", poolName+"::"+volName+"."+snapshotName)
-		err = p.requestAuthenticated(http.MethodPatch, url.URL, req, nil)
-		if err != nil {
-			return fmt.Errorf("Failed to destroy snapshot %q for volume %q in storage pool %q: %w", snapshotName, volName, poolName, err)
-		}
-	}
-
-	// Delete (eradicate) snapshot.
-	url := api.NewURL().Path("volume-snapshots").WithQuery("names", poolName+"::"+volName+"."+snapshotName)
-	err = p.requestAuthenticated(http.MethodDelete, url.URL, nil, nil)
+	err := p.deleteVolume(poolName, snapshotName)
 	if err != nil {
 		return fmt.Errorf("Failed to delete snapshot %q for volume %q in storage pool %q: %w", snapshotName, volName, poolName, err)
 	}
@@ -897,13 +1024,13 @@ func (p *hpeClient) deleteVolumeSnapshot(poolName string, volName string, snapsh
 
 // restoreVolumeSnapshot restores the volume by copying the volume snapshot into its parent volume.
 func (p *hpeClient) restoreVolumeSnapshot(poolName string, volName string, snapshotName string) error {
-	return p.copyVolume(poolName, volName+"."+snapshotName, poolName, volName, true)
+	return p.copyVolume(poolName, volName+"."+snapshotName, poolName, volName)
 }
 
 // copyVolumeSnapshot copies the volume snapshot into destination volume. Destination volume is overwritten
 // if already exists.
 func (p *hpeClient) copyVolumeSnapshot(srcPoolName string, srcVolName string, srcSnapshotName string, dstPoolName string, dstVolName string) error {
-	return p.copyVolume(srcPoolName, srcVolName+"."+srcSnapshotName, dstPoolName, dstVolName, true)
+	return p.copyVolume(srcPoolName, srcVolName+"."+srcSnapshotName, dstPoolName, dstVolName)
 }
 
 // getHosts retrieves an existing HPE Storage host.
@@ -948,7 +1075,7 @@ func (p *hpeClient) getCurrentHost() (*hpeHost, error) {
 
 	for _, host := range hosts {
 		if mode == connectors.TypeISCSI {
-			for _, iscsiPath := range host.iSCSIPaths {
+			for _, iscsiPath := range host.ISCSIPaths {
 				if iscsiPath.Name == qn {
 					logger.Debugf("HPE iSCSI QN found: %s", qn)
 					return &host, nil
@@ -997,10 +1124,18 @@ func (p *hpeClient) createHost(hostName string, qns string) error {
 	url := api.NewURL().Path("api", "v1", "hosts")
 	err = p.requestAuthenticated(http.MethodPost, url.URL, req, nil)
 	if err != nil {
-		if isHpeErrorOf(err, http.StatusBadRequest, "Host already exists.") {
-			return api.StatusErrorf(http.StatusConflict, "Host %q already exists", hostName)
+
+		if hpeErr, ok := err.(*hpeError); ok {
+			switch hpeErr.Code {
+			case 16:
+				logger.Debugf("HPE debug host already exists: %s", hostName)
+				return nil
+			default:
+				return fmt.Errorf("HPE debug. hpeErr.Code: %d. hpeErr.Desc: %s", hpeErr.Code, hpeErr.Desc)
+			}
 		}
 
+		logger.Debugf("HPE debug failed to create host: %s", hostName)
 		return fmt.Errorf("Failed to create host %q: %w", hostName, err)
 	}
 
@@ -1044,6 +1179,13 @@ func (p *hpeClient) deleteHost(hostName string) error {
 	url := api.NewURL().Path("api", "v1", "hosts", hostName)
 	err := p.requestAuthenticated(http.MethodDelete, url.URL, nil, nil)
 	if err != nil {
+		if hpeErr, ok := err.(*hpeError); ok {
+			switch hpeErr.Code {
+			case 26:
+				logger.Debugf("HPE debug. Host %s will not be deleted since it has exported volumes", hostName)
+				return nil
+			}
+		}
 		return fmt.Errorf("Failed to delete host %q: %w", hostName, err)
 	}
 
@@ -1055,8 +1197,6 @@ func (p *hpeClient) deleteHost(hostName string) error {
 func (p *hpeClient) connectHostToVolume(poolName string, volName string, hostName string) (bool, error) {
 	logger.Debugf("HPE connectHostToVolume()")
 
-	// url := api.NewURL().Path("connections").WithQuery("host_names", hostName).WithQuery("volume_names", poolName+"::"+volName)
-
 	url := api.NewURL().Path("api", "v1", "vluns")
 
 	req := make(map[string]any)
@@ -1066,12 +1206,23 @@ func (p *hpeClient) connectHostToVolume(poolName string, volName string, hostNam
 	req["lun"] = 0
 	req["autoLun"] = true
 
+	// var respBody any
 	err := p.requestAuthenticated(http.MethodPost, url.URL, req, nil)
 	if err != nil {
-		if isHpeErrorOf(err, http.StatusBadRequest, "Connection already exists.") {
-			// Do not error out if connection already exists.
-			return false, nil
+		if hpeErr, ok := err.(*hpeError); ok {
+			switch hpeErr.Code {
+			case 29:
+				logger.Debugf("HPE using existing settings. Volume %s already attached to %s", volName, hostName)
+				return false, nil
+			default:
+				return false, fmt.Errorf("HPE debug. hpeErr.Code: %d. hpeErr.Desc: %s", hpeErr.Code, hpeErr.Desc)
+			}
 		}
+
+		// // Handle connection already exists case specifically
+		// if isHpeErrorOf(err, http.StatusBadRequest, "Connection already exists.") {
+		// 	return false, nil
+		// }
 
 		return false, fmt.Errorf("Failed to connect volume %q with host %q: %w", volName, hostName, err)
 	}
@@ -1083,11 +1234,15 @@ func (p *hpeClient) connectHostToVolume(poolName string, volName string, hostNam
 func (p *hpeClient) disconnectHostFromVolume(poolName string, volName string, hostName string) error {
 	logger.Debugf("HPE disconnectHostFromVolume()")
 
-	// url := api.NewURL().Path("connections").WithQuery("host_names", hostName).WithQuery("volume_names", poolName+"::"+volName)
-
 	vlun, errVLUN := p.getVLUN(volName)
 	if errVLUN != nil {
+		logger.Debugf("HPE debug error: %s", errVLUN)
 		return fmt.Errorf("HPE Error %w", errVLUN)
+	}
+
+	if vlun == nil {
+		logger.Debugf("HPE debug no need to disconnect host %s from volume %s", hostName, volName)
+		return nil
 	}
 
 	customParam := volName + "," + strconv.Itoa(vlun.LUN) + "," + hostName
@@ -1160,25 +1315,15 @@ func (p *hpeClient) getTarget() (targetNQN string, targetAddrs []string, err err
 	}
 	logger.Debugf("HPE retrieved WSAPI target addresses %s", portMembers)
 
-	// // Retrieve the list of HPE Storage network interfaces.
-	// interfaces, err := p.getNetworkInterfaces(service)
-	// if err != nil {
-	// 	return "", nil, err
-	// }
-
-	// if len(interfaces) == 0 {
-	// 	return "", nil, api.StatusErrorf(http.StatusNotFound, "Enabled network interface with %q service not found", service)
-	// }
-
 	// First check if target addresses are configured, otherwise, use the discovered ones.
 	var configAddrs = shared.SplitNTrimSpace(p.driver.config["hpe.target.addresses"], ",", -1, true)
 	if len(configAddrs) > 0 {
-		targetAddrs = configAddrs
-		logger.Debugf("HPE using already configured driver hpe.target.addresses: %s", targetAddrs)
 		// targetAddrs = make([]string, 0, len(interfaces))
 		// for _, iface := range interfaces {
 		// 	targetAddrs = append(targetAddrs, iface.Ethernet.Address)
 		// }
+		targetAddrs = configAddrs
+		logger.Debugf("HPE using already configured driver hpe.target.addresses: %s", targetAddrs)
 	} else {
 		targetAddrs = portMembers
 		logger.Debugf("HPE using WSAPI target addresses: %s", targetAddrs)
@@ -1202,6 +1347,16 @@ func (p *hpeClient) getTarget() (targetNQN string, targetAddrs []string, err err
 		targetNQN = hpeRespSystem.Name
 		logger.Debugf("HPE using WSAPI target NQN: %s", targetNQN)
 	}
+
+	// // Retrieve the list of HPE Storage network interfaces.
+	// interfaces, err := p.getNetworkInterfaces(service)
+	// if err != nil {
+	// 	return "", nil, err
+	// }
+
+	// if len(interfaces) == 0 {
+	// 	return "", nil, api.StatusErrorf(http.StatusNotFound, "Enabled network interface with %q service not found", service)
+	// }
 
 	if targetNQN == "" || len(targetAddrs) == 0 {
 		return "", nil, fmt.Errorf("HPE no usable target found for mode %q", mode)
@@ -1496,15 +1651,17 @@ func (d *hpe) getMappedDevPath(vol Volume, mapVolume bool) (string, revert.Hook,
 
 	hpeVol, err := d.client().getVolume(vol.pool, volName)
 	if err != nil {
+		logger.Debugf("HPE hpeVol not found: %s", err)
 		return "", nil, err
 	}
 
-	// Ensure the serial number is exactly 24 characters long, as it uniquely
+	// Ensure the serial number is exactly 32 characters long, as it uniquely
 	// identifies the device. This check should never succeed, but prevents
 	// out-of-bounds errors when slicing the string later.
-	if len(hpeVol.Serial) != 24 {
-		return "", nil, fmt.Errorf("Failed to locate device for volume %q: Unexpected length of serial number %q (%d)", vol.name, hpeVol.Serial, len(hpeVol.Serial))
+	if len(hpeVol.NGUID) != 32 {
+		return "", nil, fmt.Errorf("Failed to locate device for volume %q: Unexpected length of UUID %q (%d)", vol.name, hpeVol.NGUID, len(hpeVol.NGUID))
 	}
+	logger.Debugf("HPE volume NGUID: %s", hpeVol.NGUID)
 
 	var diskPrefix string
 	var diskSuffix string
@@ -1512,16 +1669,18 @@ func (d *hpe) getMappedDevPath(vol Volume, mapVolume bool) (string, revert.Hook,
 	switch connector.Type() {
 	case connectors.TypeISCSI:
 		diskPrefix = "scsi-"
-		diskSuffix = hpeVol.Serial
+		diskSuffix = strings.ToLower(hpeVol.NGUID)
 	case connectors.TypeNVME:
 		diskPrefix = "nvme-eui."
+		diskSuffix = strings.ToLower(hpeVol.NGUID)
 
 		// The disk device ID (e.g. "008726b5033af24324a9373d00014196") is constructed as:
 		// - "00"             - Padding
 		// - "8726b5033af243" - First 14 characters of serial number
 		// - "24a937"         - OUI (Organizationally Unique Identifier)
 		// - "3d00014196"     - Last 10 characters of serial number
-		diskSuffix = "00" + hpeVol.Serial[0:14] + "24a937" + hpeVol.Serial[14:]
+
+		// diskSuffix = "00" + hpeVol.NGUID[0:14] + "24a937" + hpeVol.NGUID[14:]
 	default:
 		return "", nil, fmt.Errorf("Unsupported HPE Storage mode %q", connector.Type())
 	}
@@ -1549,6 +1708,9 @@ func (d *hpe) getMappedDevPath(vol Volume, mapVolume bool) (string, revert.Hook,
 	cleanup := revert.Clone().Fail
 
 	revert.Success()
+
+	logger.Debugf("HPE disk: %s%s", diskPrefix, diskSuffix)
+	logger.Debugf("HPE devicePath: %s", devicePath)
 
 	return devicePath, cleanup, nil
 }
@@ -1581,6 +1743,8 @@ func (d *hpe) getVolumeName(vol Volume) (string, error) {
 	if vol.IsSnapshot() {
 		volName = hpeSnapshotPrefix + volName
 	}
+
+	logger.Debugf("HPE volume name: %s", volName)
 
 	return volName, nil
 }

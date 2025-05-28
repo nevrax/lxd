@@ -4176,6 +4176,7 @@ func (b *lxdBackend) UnmountInstanceSnapshot(inst instance.Instance, op *operati
 // volume settings ("volume.size" and "block.filesystem" if applicable). If not the optimized volume is removed
 // and regenerated to apply the pool's current volume settings.
 func (b *lxdBackend) EnsureImage(fingerprint string, op *operations.Operation) error {
+	logger.Debugf("backend EnsureImage()")
 	l := b.logger.AddContext(logger.Ctx{"fingerprint": fingerprint})
 	l.Debug("EnsureImage started")
 	defer l.Debug("EnsureImage finished")
@@ -4222,6 +4223,7 @@ func (b *lxdBackend) EnsureImage(fingerprint string, op *operations.Operation) e
 	// Try and load any existing volume config on this storage pool so we can compare filesystems if needed.
 	imgDBVol, err := VolumeDBGet(b, api.ProjectDefaultName, image.Fingerprint, drivers.VolumeTypeImage)
 	if err != nil && !response.IsNotFoundError(err) {
+		logger.Debugf("backend EnsureImage() imgDBVol: %s", err)
 		return err
 	}
 
@@ -7195,6 +7197,8 @@ func (b *lxdBackend) UpdateInstanceBackupFile(inst instance.Instance, snapshots 
 		if err != nil {
 			return err
 		}
+
+		logger.Debugf("Backup file updated: %s/backup.yaml", path)
 
 		return f.Close()
 	}, op)

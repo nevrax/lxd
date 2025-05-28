@@ -128,7 +128,7 @@ func (d *hpe) FillConfig() error {
 // Validate checks that all provided keys are supported and there is no conflicting or missing configuration.
 func (d *hpe) Validate(config map[string]string) error {
 	rules := map[string]func(value string) error{
-		"hpe.description":            validate.IsAny,
+		"hpe.description":            validate.Optional(validate.IsAny),
 		"hpe.wsapi.url":              validate.Optional(validate.IsRequestURL),
 		"hpe.wsapi.verifyssl":        validate.Optional(validate.IsBool),
 		"hpe.wsapi.username":         validate.IsAny,

@@ -80,24 +80,26 @@ func extractUniqueSubNQN(output string) (string, error) {
 	}
 
 	// Assume the first match is the expected consistent subnqn
-	expectedSubnqn := strings.TrimSpace(matches[0][1])
+	expectedSubNQN := strings.TrimSpace(matches[0][1])
 	for _, match := range matches {
 		if len(match) > 1 {
 			currentSubnqn := strings.TrimSpace(match[1])
-			if currentSubnqn != expectedSubnqn {
-				return "", fmt.Errorf("inconsistent subnqn values found: %s and %s", expectedSubnqn, currentSubnqn)
+			if currentSubnqn != expectedSubNQN {
+				return "", fmt.Errorf("inconsistent subnqn values found: %s and %s", expectedSubNQN, currentSubnqn)
 			}
 		}
 	}
 
-	return expectedSubnqn, nil
+	logger.Debugf("NVMe extracted SubNQN: %s", expectedSubNQN)
+
+	return expectedSubNQN, nil
 }
 
 // perform NVMe discovery and extract subnqn.
-func discoverNVMeTCP(ctx context.Context, targetAddr string) (string, error) {
-	logger.Debugf("NVMe discoverNVMeTCP()")
+func nvmeCLIDiscover(ctx context.Context, targetAddr string, hostNQN string) (string, error) {
+	logger.Debugf("NVMe nvmeCLIDiscover()")
 
-	command := []string{"nvme", "discover", "--transport", "tcp", "--traddr", targetAddr, "-s", "4420"}
+	command := []string{"nvme", "discover", "--transport", "tcp", "--traddr", targetAddr, "--hostnqn", hostNQN, "-s", "4420"}
 	logger.Debugf("NVMe running command:\n%s", strings.Join(command, " "))
 
 	stdout, err := shared.RunCommandContext(ctx, command[0], command[1:]...)
@@ -115,15 +117,73 @@ func discoverNVMeTCP(ctx context.Context, targetAddr string) (string, error) {
 	return subnqn, nil
 }
 
+// perform nvme list.
+func nvmeCLIList(ctx context.Context) (string, error) {
+	logger.Debugf("NVMe nvmeCLIList()")
+
+	command := []string{"nvme", "list"}
+	logger.Debugf("NVMe running command: %s", strings.Join(command, " "))
+
+	stdout, err := shared.RunCommandContext(ctx, command[0], command[1:]...)
+	logger.Debugf("NVMe list output:\n%s", stdout)
+	if err != nil {
+		return "", fmt.Errorf("Failed to run nvme list")
+	}
+
+	return stdout, nil
+}
+
+// perform nvme connect.
+func (c *connectorNVMe) nvmeCLIConnect(ctx context.Context, targetAddr string, targetQN string, hostNQN string, serverUUID string) (string, error) {
+	logger.Debugf("NVMe nvmeCLIConnect()")
+
+	command := []string{"nvme", "connect", "--transport", "tcp", "--traddr", targetAddr, "--nqn", targetQN, "--hostnqn", hostNQN, "--hostid", serverUUID, "-s", "4420"}
+	logger.Debugf("NVMe running command:\n%s", strings.Join(command, " "))
+
+	stdout, err := shared.RunCommandContext(ctx, command[0], command[1:]...)
+	if err != nil {
+		if strings.Contains(err.Error(), "could not add new controller: already connected") {
+
+			logger.Debugf("NVMe already connected to: %s", targetQN)
+			return stdout, nil
+
+			// another temp fix
+			// logger.Debugf("NVMe already connected! Temp fix disconnect from: %s", targetQN)
+			// c.Disconnect(targetQN)
+
+			// logger.Debugf("NVMe try again on: %s", targetQN)
+			// stdout, err = shared.RunCommandContext(ctx, command[0], command[1:]...)
+			// if err != nil {
+			// 	return "", fmt.Errorf("NVMe failed to connect for the second time to target %q on %q via NVMe: %w", targetQN, targetAddr, err)
+			// }
+		} else {
+			return "", fmt.Errorf("NVMe failed to connect to target %q on %q via NVMe: %w", targetQN, targetAddr, err)
+		}
+	} else {
+		logger.Debugf("NVMe connect output:\n%s", stdout)
+	}
+
+	return stdout, nil
+}
+
 // Connect establishes a connection with the target on the given address.
 func (c *connectorNVMe) Connect(ctx context.Context, targetQN string, targetAddresses ...string) (revert.Hook, error) {
 	logger.Debugf("NVMe Connect()")
 
 	// Connects to the provided target address, if the connection is not yet established.
 	connectFunc := func(ctx context.Context, session *session, targetAddr string) error {
-		if session != nil && slices.Contains(session.addresses, targetAddr) {
-			// Already connected.
-			return nil
+		logger.Debugf("NVMe Connect() targetAddr: %s", targetAddr)
+
+		if session != nil {
+			if slices.Contains(session.addresses, targetAddr) {
+				logger.Debugf("NVMe Connect() already connected")
+				logger.Debugf("NVMe Connect() session: %s", session)
+				logger.Debugf("NVMe Connect() session.addresses: %s", session.addresses)
+				// Already connected.
+				return nil
+			}
+		} else {
+			logger.Debugf("HPE no previous sessions stored for target: %s", targetAddr)
 		}
 
 		hostNQN, err := c.QualifiedName()
@@ -131,41 +191,38 @@ func (c *connectorNVMe) Connect(ctx context.Context, targetQN string, targetAddr
 			return err
 		}
 
-		var waitSeconds = 15
-		logger.Debugf("NVMe coonnect timeout in seconds: %d", waitSeconds)
-		time.Sleep(time.Duration(waitSeconds) * time.Second)
+		var debugTimeOutBefConn = 5
+		logger.Debugf("NVMe debug timeout before connect: %d seconds", debugTimeOutBefConn)
+		time.Sleep(time.Duration(debugTimeOutBefConn) * time.Second)
 
-		subnqn, err := discoverNVMeTCP(ctx, targetAddr)
+		subnqn, err := nvmeCLIDiscover(ctx, targetAddr, hostNQN)
 		if err != nil {
 			return fmt.Errorf("Failed to discover NVMe/TCP target %s: %w", targetAddr, err)
 		}
 		logger.Debugf("NVMe discovered SubNQN: %s", subnqn)
 
-		targetQN = subnqn
-
 		if subnqn != "" && subnqn != targetQN {
 			logger.Debugf("NVMe temp fix! Override hpe.target.nqn %q wit SubNQN %q", targetQN, subnqn)
 			targetQN = subnqn
+
+			// crash
+			// logger.Debugf("NVMe storing session for further usage, if needed: %s", targetAddr)
+			// session.addresses = append(session.addresses, targetAddr)
 		}
 
-		command := []string{"nvme", "connect", "--transport", "tcp", "--traddr", targetAddr, "--nqn", targetQN, "--hostnqn", hostNQN, "--hostid", c.serverUUID, "-s", "4420"}
-		logger.Debugf("NVMe running command:\n%s", strings.Join(command, " "))
-
-		nvmeConnect, err := shared.RunCommandContext(ctx, command[0], command[1:]...)
+		_, err = c.nvmeCLIConnect(ctx, targetAddr, targetQN, hostNQN, c.serverUUID)
 		if err != nil {
-			return fmt.Errorf("NVMe failed to connect to target %q on %q via NVMe: %w", targetQN, targetAddr, err)
+			return err
 		}
-		logger.Debugf("NVMe connect output:\n%s", nvmeConnect)
 
-		var waitSeconds2 = 15
-		logger.Debugf("NVMe DEBUG. Pause! Let's do some extra tests. Timeout in seconds: %d", waitSeconds2)
-		time.Sleep(time.Duration(waitSeconds2) * time.Second)
+		var debugTimeOutAftConn = 3
+		logger.Debugf("NVMe debug timeout after connect: %d seconnds", debugTimeOutAftConn)
+		time.Sleep(time.Duration(debugTimeOutAftConn) * time.Second)
 
-		nvmeList, err := shared.RunCommandContext(ctx, "nvme", "list")
+		_, err = nvmeCLIList(ctx)
 		if err != nil {
-			// return fmt.Errorf("NVMe failed to run nvm list: %s", err)
+			return err
 		}
-		logger.Debugf("NVMe list output:\n%s", nvmeList)
 
 		return nil
 	}
@@ -217,6 +274,8 @@ func (c *connectorNVMe) Disconnect(targetQN string) error {
 func (c *connectorNVMe) findSession(targetQN string) (*session, error) {
 	logger.Debugf("NVMe findSession()")
 
+	logger.Debugf("NVMe looking for: %s", targetQN)
+
 	// Base path for NVMe sessions/subsystems.
 	subsysBasePath := "/sys/class/nvme-subsystem"
 
@@ -231,25 +290,30 @@ func (c *connectorNVMe) findSession(targetQN string) (*session, error) {
 
 		return nil, fmt.Errorf("Failed getting a list of existing NVMe subsystems: %w", err)
 	}
+	logger.Debugf("NVMe dump subsystems:\n%s", subsystems)
 
 	sessionID := ""
 	for _, subsys := range subsystems {
+		logger.Debugf("NVMe subsys:%s", subsys)
+
 		// Get the target NQN.
 		nqnBytes, err := os.ReadFile(filepath.Join(subsysBasePath, subsys.Name(), "subsysnqn"))
 		if err != nil {
 			return nil, fmt.Errorf("Failed getting the target NQN for subystem %q: %w", subsys.Name(), err)
 		}
+		logger.Debugf("NVMe nqnBytes: %s", nqnBytes)
 
 		// Compare using contains, as targetQN may not be the entire NQN.
-		// For example, PowerFlex targetQN is a substring of the full NQN.
 		if strings.Contains(string(nqnBytes), targetQN) {
 			// Found matching session.
 			sessionID = strings.TrimPrefix(subsys.Name(), "nvme-subsys")
+			logger.Debugf("NVMe sessionID: %s", sessionID)
 			break
 		}
 	}
 
 	if sessionID == "" {
+		logger.Debugf("NVMe no matching session found")
 		// No matching session found.
 		return nil, nil
 	}

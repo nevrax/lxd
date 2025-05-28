@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -56,6 +58,7 @@ func (d *hpe) commonVolumeRules() map[string]func(value string) error {
 
 // CreateVolume creates an empty volume and can optionally fill it by executing the supplied filler function.
 func (d *hpe) CreateVolume(vol Volume, filler *VolumeFiller, op *operations.Operation) error {
+	logger.Debugf("HPE vols CreateVolume()")
 	client := d.client()
 
 	revert := revert.New()
@@ -72,6 +75,7 @@ func (d *hpe) CreateVolume(vol Volume, filler *VolumeFiller, op *operations.Oper
 	}
 
 	// Create the volume.
+	logger.Debugf("HPE creating storage volume %s/%s (%d bytes)", vol.pool, volName, sizeBytes)
 	err = client.createVolume(vol.pool, volName, sizeBytes)
 	if err != nil {
 		return err
@@ -88,10 +92,28 @@ func (d *hpe) CreateVolume(vol Volume, filler *VolumeFiller, op *operations.Oper
 
 		revert.Add(cleanup)
 
+		logger.Debugf("HPE start creating filesystem %s on %s", volumeFilesystem, devPath)
 		_, err = makeFSType(devPath, volumeFilesystem, nil)
 		if err != nil {
 			return err
 		}
+
+		stdout, err := shared.TryRunCommand("blkid", devPath)
+		if err != nil {
+			logger.Debugf("HPE cannot obtain blkid details on: %s", devPath)
+			return err
+		} else {
+			logger.Debugf("HPE blkid %s\n%s", devPath, stdout)
+		}
+
+		stdout, err = shared.TryRunCommand("fdisk", "-l", devPath)
+		if err != nil {
+			logger.Debugf("HPE cannot obtain fdisk details on: %s", devPath)
+			return err
+		} else {
+			logger.Debugf("HPE fdisk -l %s\n%s", devPath, stdout)
+		}
+
 	}
 
 	// For VMs, also create the filesystem volume.
@@ -176,6 +198,8 @@ func (d *hpe) CreateVolumeFromBackup(vol VolumeCopy, srcBackup backup.Info, srcD
 
 // CreateVolumeFromCopy provides same-pool volume copying functionality.
 func (d *hpe) CreateVolumeFromCopy(vol VolumeCopy, srcVol VolumeCopy, allowInconsistent bool, op *operations.Operation) error {
+	logger.Debugf("HPE vols CreateVolumeFromCopy()")
+
 	revert := revert.New()
 	defer revert.Fail()
 
@@ -315,10 +339,13 @@ func (d *hpe) CreateVolumeFromCopy(vol VolumeCopy, srcVol VolumeCopy, allowIncon
 			return err
 		}
 	} else {
-		err = d.client().copyVolume(srcPoolName, srcVolName, poolName, volName, true)
+		err = d.client().copyVolume(srcPoolName, srcVolName, poolName, volName)
 		if err != nil {
 			return err
 		}
+		var debugTimeOutCopyVol = 30
+		logger.Debugf("NVMe debug timeout copyVolume: %d seconds", debugTimeOutCopyVol)
+		time.Sleep(time.Duration(debugTimeOutCopyVol) * time.Second)
 	}
 
 	// Add reverted to delete destination volume, if not already added.
@@ -403,6 +430,8 @@ func (d *hpe) RefreshVolume(vol VolumeCopy, srcVol VolumeCopy, refreshSnapshots 
 // refreshes either block or filesystem volume, depending on the volume type. Therefore, the caller
 // needs to ensure it is called twice - once for each volume type.
 func (d *hpe) refreshVolume(vol VolumeCopy, srcVol VolumeCopy, refreshSnapshots []string, allowInconsistent bool, op *operations.Operation) (revert.Hook, error) {
+	logger.Debugf("HPE vols refreshVolume()")
+
 	revert := revert.New()
 	defer revert.Fail()
 
@@ -545,7 +574,7 @@ func (d *hpe) refreshVolume(vol VolumeCopy, srcVol VolumeCopy, refreshSnapshots 
 			return nil, err
 		}
 	} else {
-		err = d.client().copyVolume(srcPoolName, srcVolName, poolName, volName, true)
+		err = d.client().copyVolume(srcPoolName, srcVolName, poolName, volName)
 		if err != nil {
 			return nil, err
 		}
@@ -567,6 +596,7 @@ func (d *hpe) refreshVolume(vol VolumeCopy, srcVol VolumeCopy, refreshSnapshots 
 
 // DeleteVolume deletes the volume and all associated snapshots.
 func (d *hpe) DeleteVolume(vol Volume, op *operations.Operation) error {
+
 	volExists, err := d.HasVolume(vol)
 	if err != nil {
 		return err
@@ -716,6 +746,8 @@ func (d *hpe) FillVolumeConfig(vol Volume) error {
 
 // ValidateVolume validates the supplied volume config.
 func (d *hpe) ValidateVolume(vol Volume, removeUnknownKeys bool) error {
+	logger.Debugf("HPE vols ValidateVolume()")
+
 	// When creating volumes from ISO images, round its size to the next multiple of 512B.
 	if vol.ContentType() == ContentTypeISO {
 		sizeBytes, err := units.ParseByteSizeString(vol.ConfigSize())
@@ -748,6 +780,8 @@ func (d *hpe) ValidateVolume(vol Volume, removeUnknownKeys bool) error {
 
 // UpdateVolume applies config changes to the volume.
 func (d *hpe) UpdateVolume(vol Volume, changedConfig map[string]string) error {
+	logger.Debugf("HPE vols UpdateVolume()")
+
 	newSize, sizeChanged := changedConfig["size"]
 	if sizeChanged {
 		err := d.SetVolumeQuota(vol, newSize, false, nil)
@@ -767,16 +801,18 @@ func (d *hpe) GetVolumeUsage(vol Volume) (int64, error) {
 	}
 
 	hpeVol, err := d.client().getVolume(vol.pool, volName)
-	if err != nil {
+	if err != nil || hpeVol == nil {
 		return -1, err
 	}
 
-	return hpeVol.Space.UsedBytes, nil
+	return int64(hpeVol.TotalUsedMiB * 1024 * 1024), nil
 }
 
 // SetVolumeQuota applies a size limit on volume.
 // Does nothing if supplied with an non-positive size.
 func (d *hpe) SetVolumeQuota(vol Volume, size string, allowUnsafeResize bool, op *operations.Operation) error {
+	logger.Debugf("HPE vols SetVolumeQuota()")
+
 	revert := revert.New()
 	defer revert.Fail()
 
@@ -802,7 +838,7 @@ func (d *hpe) SetVolumeQuota(vol Volume, size string, allowUnsafeResize bool, op
 		return err
 	}
 
-	oldSizeBytes := hpeVol.Space.TotalBytes
+	oldSizeBytes := int64(hpeVol.SizeMiB) * 1024 * 1024
 
 	// Do nothing if volume is already specified size (+/- 512 bytes).
 	if oldSizeBytes+512 > sizeBytes && oldSizeBytes-512 < sizeBytes {
@@ -928,6 +964,7 @@ func (d *hpe) SetVolumeQuota(vol Volume, size string, allowUnsafeResize bool, op
 
 // GetVolumeDiskPath returns the location of a root disk block device.
 func (d *hpe) GetVolumeDiskPath(vol Volume) (string, error) {
+	logger.Debugf("HPE vols GetVolumeDiskPath()")
 	if vol.IsVMBlock() || (vol.volType == VolumeTypeCustom && IsContentBlock(vol.contentType)) {
 		devPath, _, err := d.getMappedDevPath(vol, false)
 		return devPath, err
@@ -938,11 +975,13 @@ func (d *hpe) GetVolumeDiskPath(vol Volume) (string, error) {
 
 // ListVolumes returns a list of LXD volumes in storage pool.
 func (d *hpe) ListVolumes() ([]Volume, error) {
+	logger.Debugf("HPE vols ListVolumes()")
 	return []Volume{}, nil
 }
 
 // MountVolume mounts a volume and increments ref counter. Please call UnmountVolume() when done with the volume.
 func (d *hpe) MountVolume(vol Volume, op *operations.Operation) error {
+	logger.Debugf("HPE vols MountVolume()")
 	unlock, err := vol.MountLock()
 	if err != nil {
 		return err
@@ -958,6 +997,7 @@ func (d *hpe) MountVolume(vol Volume, op *operations.Operation) error {
 	if err != nil {
 		return err
 	}
+	logger.Debugf("HPE volDevPath: %s", volDevPath)
 
 	revert.Add(cleanup)
 
@@ -969,6 +1009,7 @@ func (d *hpe) MountVolume(vol Volume, op *operations.Operation) error {
 			if err != nil {
 				return err
 			}
+			logger.Debugf("HPE volume %s mounted on: %s", vol.name, mountPath)
 
 			fsType := vol.ConfigBlockFilesystem()
 
@@ -1007,6 +1048,8 @@ func (d *hpe) MountVolume(vol Volume, op *operations.Operation) error {
 // UnmountVolume simulates unmounting a volume.
 // keepBlockDev indicates if backing block device should not be unmapped if volume is unmounted.
 func (d *hpe) UnmountVolume(vol Volume, keepBlockDev bool, op *operations.Operation) (bool, error) {
+	logger.Debugf("HPE vols UnmountVolume()")
+
 	unlock, err := vol.MountLock()
 	if err != nil {
 		return false, err
@@ -1025,6 +1068,7 @@ func (d *hpe) UnmountVolume(vol Volume, keepBlockDev bool, op *operations.Operat
 			return false, ErrInUse
 		}
 
+		logger.Debugf("HPE vols debug. Attempt filesystem unmount: %s", mountPath)
 		err := TryUnmount(mountPath, unix.MNT_DETACH)
 		if err != nil {
 			return false, err
@@ -1032,6 +1076,7 @@ func (d *hpe) UnmountVolume(vol Volume, keepBlockDev bool, op *operations.Operat
 
 		// Attempt to unmap.
 		if !keepBlockDev {
+			logger.Debugf("HPE vols debug. FS unmounted. Attempt unmap volume: %s", vol.name)
 			err = d.unmapVolume(vol)
 			if err != nil {
 				return false, err
@@ -1043,6 +1088,7 @@ func (d *hpe) UnmountVolume(vol Volume, keepBlockDev bool, op *operations.Operat
 		// For VMs, unmount the filesystem volume.
 		if vol.IsVMBlock() {
 			fsVol := vol.NewVMBlockFilesystemVolume()
+			logger.Debugf("HPE vols debug. Attempt to umount filesystem volume: %s", fsVol.name)
 			ourUnmount, err = d.UnmountVolume(fsVol, false, op)
 			if err != nil {
 				return false, err
@@ -1052,6 +1098,7 @@ func (d *hpe) UnmountVolume(vol Volume, keepBlockDev bool, op *operations.Operat
 		if !keepBlockDev {
 			// Check if device is currently mapped (but don't map if not).
 			devPath, _, _ := d.getMappedDevPath(vol, false)
+			logger.Debugf("HPE vols debug. Check if mapped on devPath %s without mapping volume %s:", devPath, vol.name)
 			if devPath != "" && shared.PathExists(devPath) {
 				if refCount > 0 {
 					d.logger.Debug("Skipping unmount as in use", logger.Ctx{"volName": vol.name, "refCount": refCount})
@@ -1059,6 +1106,7 @@ func (d *hpe) UnmountVolume(vol Volume, keepBlockDev bool, op *operations.Operat
 				}
 
 				// Attempt to unmap.
+				logger.Debugf("HPE vols debug. Attempt to unmap volume: %s", vol.name)
 				err := d.unmapVolume(vol)
 				if err != nil {
 					return false, err
@@ -1069,6 +1117,7 @@ func (d *hpe) UnmountVolume(vol Volume, keepBlockDev bool, op *operations.Operat
 		}
 	}
 
+	logger.Debugf("HPE vols debug. Unmount status: %s", strconv.FormatBool(ourUnmount))
 	return ourUnmount, nil
 }
 

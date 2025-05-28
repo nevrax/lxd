@@ -11,6 +11,7 @@ import (
 	"github.com/canonical/lxd/lxd/refcount"
 	"github.com/canonical/lxd/shared"
 	"github.com/canonical/lxd/shared/api"
+	"github.com/canonical/lxd/shared/logger"
 	"github.com/canonical/lxd/shared/revert"
 	"github.com/canonical/lxd/shared/units"
 )
@@ -225,6 +226,8 @@ func (v Volume) MountInUse() bool {
 // EnsureMountPath creates the volume's mount path if missing, then sets the correct permission for the type.
 // If permission setting fails and the volume is a snapshot then the error is ignored as snapshots are read only.
 func (v Volume) EnsureMountPath() error {
+	logger.Debugf("HPE EnsureMountPath()")
+
 	volPath := v.MountPath()
 
 	revert := revert.New()
@@ -287,8 +290,10 @@ func (v Volume) MountTask(task func(mountPath string, op *operations.Operation) 
 	var err error
 
 	if v.IsSnapshot() {
+		logger.Debugf("Volume debug MountTask MountVolumeSnapshot %s", v.name)
 		err = v.driver.MountVolumeSnapshot(v, op)
 	} else {
+		logger.Debugf("Volume debug MountTask MountVolume %s", v.name)
 		err = v.driver.MountVolume(v, op)
 	}
 
@@ -302,6 +307,7 @@ func (v Volume) MountTask(task func(mountPath string, op *operations.Operation) 
 	if v.IsSnapshot() {
 		_, err = v.driver.UnmountVolumeSnapshot(v, op)
 	} else {
+		logger.Debugf("Volume debug force UnmountVolume %s", v.name)
 		_, err = v.driver.UnmountVolume(v, false, op)
 	}
 

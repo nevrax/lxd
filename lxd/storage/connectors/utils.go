@@ -191,9 +191,9 @@ func connect(ctx context.Context, c Connector, targetQN string, targetAddrs []st
 		}
 	}
 
-	var waitSeconds = 15
-	logger.Debugf("utils DEBUG. Something is wrong. Pause to verify. Timeout in seconds: %d", waitSeconds)
-	time.Sleep(time.Duration(waitSeconds) * time.Second)
+	// var waitSeconds = 15
+	// logger.Debugf("utils DEBUG. Something is wrong. Pause to verify. Timeout in seconds: %d", waitSeconds)
+	// time.Sleep(time.Duration(waitSeconds) * time.Second)
 
 	// All connections attempts have failed.
 	return nil, fmt.Errorf("Failed to connect to any address on target %q", targetQN)

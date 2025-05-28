@@ -1897,6 +1897,7 @@ func (d *lxc) handleIdmappedStorage() (idmap.IdmapStorageType, *idmap.IdmapSet, 
 
 // Start functions.
 func (d *lxc) startCommon() (string, []func() error, error) {
+	logger.Debugf("LXC startCommon()")
 	postStartHooks := []func() error{}
 
 	revert := revert.New()

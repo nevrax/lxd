@@ -425,6 +425,7 @@ func makeFSType(path string, fsType string, options *mkfsOptions) (string, error
 	cmd = append(cmd, path)
 
 	msg, err = shared.TryRunCommand(cmd[0], cmd[1:]...)
+	logger.Debugf("HPE make filesystem command: %s", cmd)
 	if err != nil {
 		return msg, err
 	}
